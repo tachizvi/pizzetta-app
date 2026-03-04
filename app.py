@@ -6,19 +6,20 @@ from datetime import datetime
 # הגדרות דף
 st.set_page_config(page_title="פיצטה - ניהול חכם", page_icon="🍕", layout="wide")
 
-# חיבור לגוגל שיטס (הקישור יוגדר ב-Secrets של Streamlit)
+# החלף את הכתובת למטה בקישור המלא של הגוגל שיטס שלך
+url = "https://docs.google.com/spreadsheets/d/YOUR_SHEET_ID_HERE/edit#gid=0"
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# פונקציות עזר לטעינה וכתיבה
+# פונקציות עזר מעודכנות שמשתמשות ב-URL ישירות
 def get_inventory():
-    return conn.read(worksheet="Inventory", ttl="1m")
+    return conn.read(spreadsheet=url, worksheet="Inventory", ttl="1m")
 
 def get_tasks():
-    # ttl=0 מבטיח שהעובד יראה את המשימה ברגע ששלחת אותה
-    return conn.read(worksheet="Tasks", ttl="0")
+    return conn.read(spreadsheet=url, worksheet="Tasks", ttl="0")
 
 def get_archive():
-    return conn.read(worksheet="Archive", ttl="1m")
+    return conn.read(spreadsheet=url, worksheet="Archive", ttl="1m")
+
 
 # זיהוי תפקיד לפי URL (למשל: ?role=admin)
 is_admin = st.query_params.get("role") == "admin"
@@ -151,4 +152,5 @@ elif choice == "עריכת קטלוג":
     edited_df = st.data_editor(df_inv, num_rows="dynamic", use_container_width=True)
     if st.button("שמור שינויים בענן"):
         conn.update(worksheet="Inventory", data=edited_df)
+
         st.success("הקטלוג עודכן בהצלחה!")
