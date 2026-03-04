@@ -3,6 +3,7 @@ import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+import ast  # ספרייה בטוחה להמרת טקסט למילון
 
 # הגדרות דף
 st.set_page_config(page_title="פיצטה - ניהול חכם", page_icon="🍕", layout="wide")
@@ -22,9 +23,7 @@ except Exception as e:
     st.error(f"שגיאת התחברות: {e}")
     st.stop()
 
-# זיהוי תפקיד לפי URL: ?role=admin
 is_admin = st.query_params.get("role") == "admin"
-
 st.title("🍕 מערכת ניהול פיצטה")
 
 if is_admin:
@@ -42,7 +41,6 @@ if choice == "ניהול משימות":
     inv_ws = sh.worksheet("Inventory")
     df_inv = pd.DataFrame(inv_ws.get_all_records())
     all_suppliers = sorted(df_inv['ספק'].unique())
-    
     selected_suppliers = st.multiselect("חפש ובחר ספקים לספירה:", all_suppliers)
     
     if st.button("שלח משימות לעובד ✅"):
@@ -52,44 +50,35 @@ if choice == "ניהול משימות":
             tasks_ws = sh.worksheet("Tasks")
             for s in selected_suppliers:
                 tasks_ws.append_row([s, "לביצוע ⏳", datetime.now().strftime("%d/%m %H:%M"), "{}"])
-            st.success(f"נשלחו {len(selected_suppliers)} משימות!")
+            st.success("המשימות נשלחו!")
 
-# --- 2. עובד: המשימות שלי (עם כפתורי פלוס גדולים) ---
+# --- 2. עובד: המשימות שלי ---
 elif choice == "המשימות שלי":
     st.header("📋 משימות ספירה פתוחות")
     tasks_ws = sh.worksheet("Tasks")
     df_tasks = pd.DataFrame(tasks_ws.get_all_records())
     
-    if 'סטטוס' not in df_tasks.columns:
-        st.info("אין משימות פעילות כרגע.")
-    else:
+    if 'סטטוס' in df_tasks.columns:
         pending = df_tasks[df_tasks['סטטוס'] == "לביצוע ⏳"]
-        
         if pending.empty:
-            st.info("אין משימות פתוחות כרגע.")
+            st.info("אין משימות פתוחות.")
         else:
             inv_ws = sh.worksheet("Inventory")
             df_inv = pd.DataFrame(inv_ws.get_all_records())
-            
             for idx, row in pending.iterrows():
                 with st.expander(f"ספירה עבור: {row['ספק']}", expanded=True):
                     s_prods = df_inv[df_inv['ספק'] == row['ספק']]
                     worker_counts = {}
-                    
                     for _, p_row in s_prods.iterrows():
                         p_name = p_row['מוצר']
                         key = f"count_{idx}_{p_name}"
-                        
-                        if key not in st.session_state:
-                            st.session_state[key] = 0.0
+                        if key not in st.session_state: st.session_state[key] = 0.0
                         
                         st.write(f"**{p_name}** ({p_row['יחידת מידה']})")
                         col_val, col_p_half, col_p_one, col_minus, col_reset = st.columns([1.5, 1, 1, 1, 1])
-                        
-                        with col_val:
-                            st.metric(label="כמות", value=st.session_state[key])
-                        with col_p_half:
-                            if st.button("+0.5", key=f"h_{key}"):
+                        with col_val: st.metric(label="כמות", value=st.session_state[key])
+                        with col_p_half: 
+                            if st.button("+0.5", key=f"h_{key}"): 
                                 st.session_state[key] += 0.5
                                 st.rerun()
                         with col_p_one:
@@ -104,9 +93,7 @@ elif choice == "המשימות שלי":
                             if st.button("🔄", key=f"r_{key}"):
                                 st.session_state[key] = 0.0
                                 st.rerun()
-                        
                         worker_counts[p_name] = st.session_state[key]
-                        st.divider()
                     
                     if st.button(f"✅ סיים ספירת {row['ספק']}", key=f"sub_{idx}"):
                         tasks_ws.update_cell(idx + 2, 2, "בוצע ✅")
@@ -116,17 +103,14 @@ elif choice == "המשימות שלי":
                         st.success("נשלח!")
                         st.rerun()
 
-# --- 3. מנהל: אישור והזמנות (תיקון השגיאה כאן) ---
+# --- 3. מנהל: אישור והזמנות (תיקון שליפת הנתונים כאן) ---
 elif choice == "אישור והזמנות":
     st.header("🛒 אישור והמרת כמויות להזמנה")
     tasks_ws = sh.worksheet("Tasks")
     df_tasks = pd.DataFrame(tasks_ws.get_all_records())
     
-    if 'סטטוס' not in df_tasks.columns:
-        st.warning("אין נתונים בטבלה.")
-    else:
+    if 'סטטוס' in df_tasks.columns:
         ready = df_tasks[df_tasks['סטטוס'] == "בוצע ✅"]
-        
         if ready.empty:
             st.warning("אין ספירות שממתינות לאישור.")
         else:
@@ -136,8 +120,12 @@ elif choice == "אישור והזמנות":
             for idx, t_row in ready.iterrows():
                 s = t_row['ספק']
                 st.subheader(f"בדיקת הזמנה: {s}")
+                
+                # שליפה בטוחה של נתוני הספירה
+                raw_counts = t_row.get('נתוני_ספירה', "{}")
                 try:
-                    counts = eval(t_row['נתוני_ספירה'])
+                    # שימוש ב-ast.literal_eval להמרה בטוחה מטקסט למילון פייתון
+                    counts = ast.literal_eval(raw_counts) if isinstance(raw_counts, str) else {}
                 except:
                     counts = {}
                 
@@ -145,9 +133,9 @@ elif choice == "אישור והזמנות":
                 s_prods = df_inv[df_inv['ספק'] == s]
                 for _, row in s_prods.iterrows():
                     p = row['מוצר']
-                    stock = counts.get(p, 0.0)
+                    # וידוא שהערך נשלף כמספר
+                    stock = float(counts.get(p, 0.0))
                     
-                    # תיקון השגיאה: המרת ערך יעד למספר בצורה בטוחה
                     try:
                         target_val = float(row['יעד השלמה']) if row['יעד השלמה'] != "" else 0.0
                     except:
@@ -156,7 +144,7 @@ elif choice == "אישור והזמנות":
                     rec = max(0.0, target_val - stock)
                     
                     col1, col2 = st.columns([3, 1])
-                    col1.write(f"**{p}** (מלאי: {stock})")
+                    col1.write(f"**{p}** (מלאי שנספר: {stock})")
                     final_q = col2.number_input(f"להזמין ({row['יחידת מידה']})", 0.0, value=float(rec), key=f"f_{idx}_{p}")
                     
                     if final_q > 0:
@@ -173,7 +161,6 @@ elif choice == "אישור והזמנות":
                     st.session_state[f"final_msg_{idx}"] = full_msg
                     arch_ws = sh.worksheet("Archive")
                     arch_ws.append_row([datetime.now().strftime("%d/%m/%Y"), s, full_msg])
-                    # מחיקה מהגליון
                     tasks_ws.delete_rows(idx + 2)
                     st.rerun()
 
@@ -192,5 +179,5 @@ elif choice == "עריכת קטלוג":
     df_inv = pd.DataFrame(inv_ws.get_all_records())
     edited = st.data_editor(df_inv, num_rows="dynamic", use_container_width=True)
     if st.button("שמור שינויים"):
-        inv_ws.update([edited.columns.values.tolist()] + edited.values.tolist())
+        inv_ws.update([edited.columns.values.tolist()] + edited.values.tolist(), value_input_option='RAW')
         st.success("עודכן!")
