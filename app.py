@@ -7,6 +7,7 @@ from datetime import datetime
 # הגדרות דף
 st.set_page_config(page_title="פיצטה - ניהול חכם", page_icon="🍕", layout="wide")
 
+@st.cache_resource
 def get_gsheet_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_info = st.secrets["gcp_service_account"]
@@ -33,17 +34,17 @@ if choice == "ניהול משימות":
     st.header("🎯 שליחת ספקים לספירה")
     df_inv = pd.DataFrame(inv_ws.get_all_records())
     all_suppliers = sorted(df_inv['ספק'].unique())
-    selected = st.multiselect("בחר ספקים לספירה היום:", all_suppliers)
+    selected = st.multiselect("בחר ספקים:", all_suppliers)
     
-    if st.button("שלח משימות לעובדים ✅"):
+    if st.button("שלח משימות ✅"):
         if selected:
             for s in selected:
                 tasks_ws.append_row([s, "לביצוע ⏳", datetime.now().strftime("%d/%m %H:%M"), ""])
-            st.success(f"נשלחו {len(selected)} משימות!")
+            st.success("נשלח!")
         else:
-            st.warning("נא לבחור ספק.")
+            st.warning("בחר ספק.")
 
-# --- 2. עובד: ביצוע משימות (הקלדה ללא רענון + עדכון טבלה מרכזית) ---
+# --- 2. עובד: ביצוע משימות (עדכון מהיר בבת אחת) ---
 elif choice == "המשימות שלי":
     st.header("📋 משימות פתוחות")
     df_tasks = pd.DataFrame(tasks_ws.get_all_records())
@@ -51,63 +52,72 @@ elif choice == "המשימות שלי":
     if 'סטטוס' in df_tasks.columns:
         pending = df_tasks[df_tasks['סטטוס'] == "לביצוע ⏳"]
         if pending.empty:
-            st.info("הכל נקי! אין משימות פתוחות.")
+            st.info("אין משימות פתוחות.")
         else:
-            df_inv = pd.DataFrame(inv_ws.get_all_records())
+            # טעינת כל הקטלוג פעם אחת
+            full_data = inv_ws.get_all_values()
+            df_inv = pd.DataFrame(full_data[1:], columns=full_data[0])
+            
             for idx, t_row in pending.iterrows():
-                with st.expander(f"ספירת מלאי: {t_row['ספק']}", expanded=True):
+                with st.expander(f"ספירה: {t_row['ספק']}", expanded=True):
                     s_prods = df_inv[df_inv['ספק'] == t_row['ספק']]
                     
-                    # שימוש בטופס למניעת רענון קופץ
                     with st.form(key=f"form_{idx}"):
-                        current_updates = {}
+                        form_data = {}
                         for _, p_row in s_prods.iterrows():
                             p_name = p_row['מוצר']
                             st.write(f"**{p_name}** ({p_row['יחידת מידה']})")
-                            
-                            # שדה הקלדה נוח למובייל
-                            val = st.number_input("כמות במלאי:", min_value=0.0, step=0.5, key=f"in_{idx}_{p_name}")
-                            
-                            # שומרים את האינדקס של השורה בגיליון ה-Inventory (אינדקס + 2)
-                            inv_row_idx = df_inv[df_inv['מוצר'] == p_name].index[0] + 2
-                            current_updates[inv_row_idx] = val
-                            st.divider()
+                            val = st.number_input("כמות:", min_value=0.0, step=0.5, key=f"in_{idx}_{p_name}")
+                            form_data[p_name] = val
                         
-                        if st.form_submit_button(f"💾 סיים ושלח ספירת {t_row['ספק']}"):
-                            # 1. עדכון סטטוס המשימה בגיליון Tasks
+                        if st.form_submit_button(f"💾 שלח ספירת {t_row['ספק']}"):
+                            # שלב א': עדכון סטטוס משימה
                             tasks_ws.update_cell(idx + 2, 2, "בוצע ✅")
                             
-                            # 2. עדכון המלאי בפועל בגיליון Inventory (עמודה "מלאי בפועל")
-                            col_idx = df_inv.columns.get_loc("מלאי בפועל") + 1
-                            for r_idx, amount in current_updates.items():
-                                inv_ws.update_cell(r_idx, col_idx, amount)
+                            # שלב ב': עדכון מלאי בפועל בבת אחת (Batch Update)
+                            # מוצאים את המיקום של עמודת 'מלאי בפועל'
+                            col_idx = full_data[0].index("מלאי בפועל")
                             
-                            st.success(f"ספירת {t_row['ספק']} עודכנה בטבלה הראשית!")
+                            # מכינים רשימה של עדכונים
+                            updates = []
+                            for p_name, amount in form_data.items():
+                                # מוצאים את השורה בגיליון
+                                r_idx = df_inv[df_inv['מוצר'] == p_name].index[0] + 2
+                                # פורמט של gspread לעדכון טווח
+                                updates.append({
+                                    'range': gspread.utils.rowcol_to_a1(r_idx, col_idx + 1),
+                                    'values': [[amount]]
+                                })
+                            
+                            # פקודה אחת שמעדכנת את הכל
+                            inv_ws.batch_update(updates)
+                            
+                            st.success("המלאי עודכן!")
                             st.rerun()
 
-# --- 3. מנהל: אישור והזמנות (קריאה ישירות מהמלאי המעודכן) ---
+# --- 3. מנהל: אישור והזמנות ---
 elif choice == "אישור והזמנות":
     st.header("🛒 יצירת הזמנות")
     df_tasks = pd.DataFrame(tasks_ws.get_all_records())
     ready_tasks = df_tasks[df_tasks['סטטוס'] == "בוצע ✅"]
     
     if ready_tasks.empty:
-        st.warning("אין ספירות שהסתיימו.")
+        st.warning("אין ספירות ממתינות.")
     else:
         df_inv = pd.DataFrame(inv_ws.get_all_records())
         for idx, t_row in ready_tasks.iterrows():
             s_name = t_row['ספק']
-            st.subheader(f"בדיקת הזמנה עבור: {s_name}")
-            
+            st.subheader(f"בדיקה: {s_name}")
             s_prods = df_inv[df_inv['ספק'] == s_name]
             order_summary = []
             
             with st.form(key=f"admin_{idx}"):
                 for _, p_row in s_prods.iterrows():
                     p_name = p_row['מוצר']
-                    stock = float(p_row['מלאי בפועל']) if p_row['מלאי בפועל'] != "" else 0.0
-                    try: target = float(p_row['יעד השלמה']) if p_row['יעד השלמה'] != "" else 0.0
-                    except: target = 0.0
+                    try:
+                        stock = float(p_row['מלאי בפועל']) if p_row['מלאי בפועל'] != "" else 0.0
+                        target = float(p_row['יעד השלמה']) if p_row['יעד השלמה'] != "" else 0.0
+                    except: stock, target = 0.0, 0.0
                     
                     rec = max(0.0, target - stock)
                     col1, col2 = st.columns([3, 1])
@@ -122,19 +132,12 @@ elif choice == "אישור והזמנות":
                 
                 if st.form_submit_button("אשר וסגור משימה"):
                     msg = f"הזמנה ל-{s_name}:\n" + "\n".join(order_summary) + "\nתודה!"
-                    st.session_state[f"msg_{idx}"] = msg
                     sh.worksheet("Archive").append_row([datetime.now().strftime("%d/%m/%Y"), s_name, msg])
-                    # מחיקת המשימה מהרשימה הפתוחה
                     tasks_ws.delete_rows(idx + 2)
+                    st.success("המשימה נסגרה!")
                     st.rerun()
-            
-            if f"msg_{idx}" in st.session_state:
-                st.text_area("הודעה להעתקה:", st.session_state[f"msg_{idx}"], height=120)
 
-# --- ארכיון ועריכה ---
-elif choice == "ארכיון":
-    st.dataframe(pd.DataFrame(sh.worksheet("Archive").get_all_records()))
-
+# --- עריכת קטלוג ---
 elif choice == "עריכת קטלוג":
     df = pd.DataFrame(inv_ws.get_all_records())
     edited = st.data_editor(df, num_rows="dynamic")
