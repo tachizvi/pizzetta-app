@@ -153,4 +153,5 @@ elif choice == "עריכת קטלוג":
     df_inv = pd.DataFrame(inv_ws.get_all_records())
     edited = st.data_editor(df_inv, num_rows="dynamic", use_container_width=True)
     if st.button("שמור"):
-        inv_ws.update([edited.
+        inv_ws.update([edited.columns.values.tolist()] + edited.values.tolist(), value_input_option='RAW')
+        st.success("עודכן!")
