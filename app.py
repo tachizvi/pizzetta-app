@@ -73,7 +73,7 @@ elif choice == "המשימות שלי":
                             st.success("עודכן!")
                             st.rerun()
 
-# --- 3. מנהל: אישור והזמנות (עם בדיקת כפולות הזמנה) ---
+# --- 3. מנהל: אישור והזמנות (עם עיגול סופי ליחידות ספק) ---
 elif choice == "אישור והזמנות":
     st.header("🛒 אישור והזמנות (ביחידות ספירה)")
     df_tasks = pd.DataFrame(tasks_ws.get_all_records())
@@ -87,7 +87,7 @@ elif choice == "אישור והזמנות":
                 s_prods = df_inv[df_inv['ספק'] == s]
                 
                 with st.form(key=f"admin_form_{idx}"):
-                    final_orders = {} # לשמירת הכמויות הסופיות לבדיקה
+                    final_orders = {}
                     valid_to_order = True
                     
                     for _, p_row in s_prods.iterrows():
@@ -99,7 +99,7 @@ elif choice == "אישור והזמנות":
                             mult = int(p_row['כפולת הזמנה']) if p_row.get('כפולת הזמנה') and p_row['כפולת הזמנה'] != "" else 1
                         except: stock, target, min_val, mult = 0, 0, 0, 1
                         
-                        # המלצה ראשונית
+                        # המלצה ראשונית (ביחידות ספירה)
                         rec = max(0, target - stock) if stock <= min_val else 0
                         # עיגול אוטומטי לכפולה הקרובה ביותר מלמעלה
                         if rec > 0 and rec % mult != 0:
@@ -111,31 +111,33 @@ elif choice == "אישור והזמנות":
                         
                         order_val = col2.number_input(f"להזמין ({p_row['יחידת מידה']})", min_value=0, step=1, value=rec, key=f"f_{idx}_{p_name}")
                         
-                        # בדיקת תקינות: האם הכמות שהוזנה היא כפולה של 'כפולת הזמנה'?
+                        # בדיקת כפולות
                         if order_val > 0 and order_val % mult != 0:
-                            st.error(f"שגיאה ב-{p_name}: ניתן להזמין רק בכפולות של {mult} {p_row['יחידת מידה']}!")
+                            st.error(f"שגיאה: {p_name} חייב להיות בכפולות של {mult}!")
                             valid_to_order = False
                         
                         if order_val > 0:
-                            # המרה לצורך ההודעה הסופית לספק
                             try: factor = float(p_row['מקדם המרה']) if p_row['מקדם המרה'] != "" else 1.0
                             except: factor = 1.0
-                            final_orders[p_name] = {"qty": order_val * factor, "unit": p_row['יחידת הזמנה']}
+                            
+                            # כאן העיגול הסופי! 
+                            # אנחנו משתמשים ב-round(..., 2) כדי לפתור בעיות של 0.99999 
+                            # ואז math.ceil כדי להבטיח יחידת ספק שלמה.
+                            raw_qty = order_val * factor
+                            final_qty = math.ceil(round(raw_qty, 4))
+                            
+                            final_orders[p_name] = {"qty": int(final_qty), "unit": p_row['יחידת הזמנה']}
 
                     if st.form_submit_button(f"אשר ושגר הזמנה ({s})"):
                         if valid_to_order and final_orders:
-                            order_lines = [f"• {name}: {int(data['qty']) if data['qty'].is_integer() else data['qty']} {data['unit']}" for name, data in final_orders.items()]
+                            order_lines = [f"• {name}: {data['qty']} {data['unit']}" for name, data in final_orders.items()]
                             msg = f"הזמנה ל-{s}:\n" + "\n".join(order_lines) + "\nתודה!"
-                            
                             arch_ws.append_row([datetime.now().strftime("%d/%m/%Y"), s, msg])
                             tasks_ws.delete_rows(idx + 2)
                             st.session_state[f"msg_{s}"] = msg
                             st.rerun()
-                        elif not final_orders:
-                            st.warning("לא הוזנו כמויות להזמנה.")
 
                 if f"msg_{s}" in st.session_state:
-                    st.success(f"ההזמנה ל-{s} נסגרה!")
                     st.text_area("הודעה להעתקה:", st.session_state[f"msg_{s}"], height=200)
                     if st.button(f"סגור הודעה ({s})"):
                         del st.session_state[f"msg_{s}"]
@@ -150,6 +152,5 @@ elif choice == "ארכיון":
 elif choice == "עריכת קטלוג":
     df_inv = pd.DataFrame(inv_ws.get_all_records())
     edited = st.data_editor(df_inv, num_rows="dynamic", use_container_width=True)
-    if st.button("שמור שינויים"):
-        inv_ws.update([edited.columns.values.tolist()] + edited.values.tolist(), value_input_option='RAW')
-        st.success("עודכן!")
+    if st.button("שמור"):
+        inv_ws.update([edited.
