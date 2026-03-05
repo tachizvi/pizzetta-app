@@ -130,7 +130,7 @@ elif choice == "אישור והזמנות":
                         except: stock, target, min_val = 0.0, 0.0, 0.0
                         
                         # לוגיקת החישוב
-                        if stock < min_val:
+                        if stock <= min_val:
                             rec = max(0.0, target - stock)
                             # בדיקת עיגול למעלה
                             if p_row.get('עיגול ליחידה שלמה') and str(p_row['עיגול ליחידה שלמה']).strip() == "כן":
@@ -179,3 +179,4 @@ elif choice == "עריכת קטלוג":
     if st.button("שמור שינויים"):
         inv_ws.update([edited.columns.values.tolist()] + edited.values.tolist(), value_input_option='RAW')
         st.success("עודכן!")
+
